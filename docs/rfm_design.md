@@ -33,6 +33,33 @@ F = 총 구매횟수 / 구매한 아티스트 수
 
 ---
 
+## 2nd Depth Dimension
+
+### Collector / Challenger / Beginner
+
+**이벤트 단위 분류**
+
+| 유형 | 조건 |
+|---|---|
+| Collector - Partial | `order_qty < virtual_child_sku_count` (일부만 구매) |
+| Collector - Full | `order_qty == virtual_child_sku_count` (전종 구매) |
+| Collector - Over | `order_qty > virtual_child_sku_count` (전종 초과 — 복수 세트) |
+| Challenger | POB 응모 목적 구매 (`event_id IS NOT NULL` 주문 비중 높음) |
+| Beginner | 위 패턴 해당 없음 |
+
+**유저 단위 레이블링 로직**
+
+1. 유저의 전체 이벤트 이력에서 이벤트별로 Collector / Challenger 분류
+2. 가장 많이 나온 패턴 → 최종 레이블
+3. **동률 우선순위**: Challenger > Collector > Beginner
+
+### Artist
+
+누적 결제금액(`total_revenue`) 기준 최다 지출 아티스트 1개.
+`total_orders.ip_name` 또는 `events_.artist_id` 기준.
+
+---
+
 ## 적용 기준
 
 - 분석 대상: `market_type IN ('B2C','B2B')` B2C 구매 유저
