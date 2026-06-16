@@ -13,7 +13,7 @@
 -- CHALLENGER_THRESHOLD: 데이터 분포 확인 후 조정 필요 (현재 기본값 2.0)
 -- ============================================================
 
-DECLARE CHALLENGER_THRESHOLD FLOAT64 DEFAULT 2.0;
+-- Challenger 임계값: qty_ratio > 1.0 (전종 초과 구매 = 응모 베팅 목적)
 
 WITH
 
@@ -89,13 +89,9 @@ event_labeled AS (
   SELECT
     *,
     CASE
-      -- Challenger: 중복 주문 OR qty_ratio 기준 초과
-      WHEN order_cnt > 1                        THEN 'Challenger'
-      WHEN qty_ratio >= CHALLENGER_THRESHOLD    THEN 'Challenger'
-      -- Collector: virtual_child_sku_count 기반 구매 패턴
-      WHEN sku_variety > 1 AND total_qty > 0    THEN 'Collector'
-      -- Beginner: 나머지
-      ELSE 'Beginner'
+      WHEN qty_ratio > 1.0  THEN 'Challenger'  -- 전종 초과 (응모 베팅)
+      WHEN qty_ratio = 1.0  THEN 'Collector'   -- 전종 정확히 수집
+      ELSE                       'Beginner'    -- 전종 미만 또는 sku_variety 없음
     END AS event_label
   FROM event_stats
 ),

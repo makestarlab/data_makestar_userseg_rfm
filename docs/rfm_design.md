@@ -37,21 +37,27 @@ F = 총 구매횟수 / 구매한 아티스트 수
 
 ### Collector / Challenger / Beginner
 
-**이벤트 단위 분류**
+**이벤트 단위 분류** (`qty_ratio = order_qty / virtual_child_sku_count`)
 
 | 유형 | 조건 |
 |---|---|
-| Collector - Partial | `order_qty < virtual_child_sku_count` (일부만 구매) |
-| Collector - Full | `order_qty == virtual_child_sku_count` (전종 구매) |
-| Collector - Over | `order_qty > virtual_child_sku_count` (전종 초과 — 복수 세트) |
-| Challenger | POB 응모 목적 구매 (`event_id IS NOT NULL` 주문 비중 높음) |
-| Beginner | 위 패턴 해당 없음 |
+| Challenger | `qty_ratio > 1.0` — 전종 초과 구매 (응모 베팅 목적) |
+| Collector | `qty_ratio = 1.0` — 전종 정확히 수집 |
+| Beginner | `qty_ratio < 1.0` 또는 `virtual_child_sku_count` 없음 |
 
 **유저 단위 레이블링 로직**
 
 1. 유저의 전체 이벤트 이력에서 이벤트별로 Collector / Challenger 분류
 2. 가장 많이 나온 패턴 → 최종 레이블
 3. **동률 우선순위**: Challenger > Collector > Beginner
+
+### V1 제한사항
+
+| 항목 | 내용 | 개선 방향 (v2) |
+|---|---|---|
+| Challenger 임계값 | `qty_ratio > 1.0` 고정. 앨범 가격을 반영하지 않음 | 라운드 내 지출 중앙값 대비 비율(`spend_ratio`)로 대체 |
+| 고가 앨범 과소 분류 | 비싼 앨범에서 qty=2도 큰 베팅이지만 qty_ratio > 1.0 기준은 동일하게 적용됨 | 가격 정규화 적용 |
+| 중복 주문 미반영 | 동일 이벤트 반복 주문 패턴 미사용 | 실제 주문 패턴 검증 후 반영 여부 결정 |
 
 ### Artist
 
