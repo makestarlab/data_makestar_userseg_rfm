@@ -1,6 +1,6 @@
-@/Users/songakim/Documents/works/analysis-shared/CLAUDE.md
-
 # Makestar 유저 세그멘테이션 — RFM + Dimension 분석
+
+<!-- analysis-shared 컨텍스트는 각자 ~/.claude/CLAUDE.md 전역 설정으로 적용 (README 참조) -->
 
 ## 프로젝트 개요
 
