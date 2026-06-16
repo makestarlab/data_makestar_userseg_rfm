@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Makestar 유저 세그멘테이션 — RFM Report</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #f5f5f7; color: #1d1d1f; padding: 24px; }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: #6e6e73; margin-bottom: 32px; }
+  .summary-bar { display: flex; gap: 16px; margin-bottom: 32px; flex-wrap: wrap; }
+  .summary-card { background: white; border-radius: 12px; padding: 20px 24px;
+                   flex: 1; min-width: 160px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .summary-card label { font-size: 12px; color: #6e6e73; display: block; margin-bottom: 4px; }
+  .summary-card value { font-size: 26px; font-weight: 700; }
+  .section-title { font-size: 20px; font-weight: 600; margin: 32px 0 16px; }
+  .personas { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
+  .persona-card { background: white; border-radius: 12px; padding: 24px;
+                   box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .persona-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .emoji { font-size: 36px; }
+  .persona-header h2 { font-size: 20px; font-weight: 700; }
+  .badge { display: inline-block; color: white; font-size: 12px; font-weight: 600;
+            padding: 3px 10px; border-radius: 20px; margin-top: 4px; }
+  .persona-desc { color: #444; line-height: 1.6; margin-bottom: 12px; }
+  .traits { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+  .trait { background: #f5f5f7; border-radius: 20px; padding: 4px 12px; font-size: 12px; color: #444; }
+  .stats-row { display: flex; gap: 12px; margin-bottom: 20px; }
+  .stat { flex: 1; background: #f5f5f7; border-radius: 8px; padding: 10px 14px; }
+  .stat label { font-size: 11px; color: #6e6e73; display: block; margin-bottom: 2px; }
+  .stat value { font-size: 15px; font-weight: 600; }
+  h3 { font-size: 14px; font-weight: 600; color: #6e6e73; margin-bottom: 10px;
+        text-transform: uppercase; letter-spacing: 0.5px; }
+  .crm-actions { display: flex; flex-direction: column; gap: 8px; }
+  .crm-item { background: #f9f9f9; border-radius: 8px; padding: 10px 14px; }
+  .crm-item strong { font-size: 13px; display: block; margin-bottom: 2px; }
+  .crm-item p { font-size: 12px; color: #6e6e73; }
+  table { width: 100%; border-collapse: collapse; background: white;
+           border-radius: 12px; overflow: hidden;
+           box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  th { background: #f5f5f7; padding: 12px 16px; text-align: left;
+        font-size: 12px; color: #6e6e73; text-transform: uppercase; }
+  td { padding: 12px 16px; border-top: 1px solid #f0f0f0; font-size: 14px; }
+  .updated { font-size: 12px; color: #aaa; margin-top: 32px; text-align: right; }
+</style>
+</head>
+<body>
+
+<h1>Makestar 유저 세그멘테이션</h1>
+<p class="subtitle">RFM × Dimension 분석 — v1</p>
+
+<div class="summary-bar">
+  <div class="summary-card">
+    <label>전체 분석 유저</label>
+    <value>147,760</value>
+  </div>
+  <div class="summary-card"><label>🏆 챌린저</label><value>1,168명</value></div><div class="summary-card"><label>📦 콜렉터</label><value>66명</value></div><div class="summary-card"><label>🌱 비기너</label><value>146,526명</value></div>
+</div>
+
+<div class="section-title">페르소나 × CRM 액션</div>
+<div class="personas">
+  
+        <div class="persona-card" style="border-top: 4px solid #FF6B6B">
+          <div class="persona-header">
+            <span class="emoji">🏆</span>
+            <div>
+              <h2>챌린저</h2>
+              <span class="badge" style="background:#FF6B6B">1,168명 (0.8%)</span>
+            </div>
+          </div>
+          <p class="persona-desc">당첨을 위해 수량을 베팅하는 열성 팬. 전종 초과 구매로 응모 확률을 극대화.</p>
+          <div class="traits"><span class="trait">높은 구매금액</span><span class="trait">동일 이벤트 고수량 구매</span><span class="trait">아티스트 충성도 강함</span></div>
+          <div class="stats-row">
+            <div class="stat"><label>평균 RFM</label><value>12.0</value></div>
+            <div class="stat"><label>평균 GMV</label><value>₩6,552,732</value></div>
+            <div class="stat"><label>평균 미접속</label><value>79.0일</value></div>
+          </div>
+          <h3>CRM 액션 예시</h3>
+          <div class="crm-actions"><div class="crm-item"><strong>응모 우선권 제공</strong><p>일정 금액 이상 구매 시 추가 응모권 자동 부여</p></div><div class="crm-item"><strong>VIP 얼리버드</strong><p>신규 이벤트 오픈 24시간 전 선구매 알림</p></div><div class="crm-item"><strong>누적 구매 리워드</strong><p>라운드별 누적 구매금액 달성 시 한정 굿즈 제공</p></div><div class="crm-item"><strong>당첨 확률 강조 마케팅</strong><p>구매량 대비 당첨 확률 시뮬레이션 제공</p></div></div>
+        </div>
+        
+        <div class="persona-card" style="border-top: 4px solid #4ECDC4">
+          <div class="persona-header">
+            <span class="emoji">📦</span>
+            <div>
+              <h2>콜렉터</h2>
+              <span class="badge" style="background:#4ECDC4">66명 (0.0%)</span>
+            </div>
+          </div>
+          <p class="persona-desc">멤버 포카를 빠짐없이 모으는 수집가. 전종 정확히 구매하는 체계적인 팬.</p>
+          <div class="traits"><span class="trait">virtual_child_sku_count 기준 정확한 구매</span><span class="trait">다양한 버전 구매</span><span class="trait">완성도 중시</span></div>
+          <div class="stats-row">
+            <div class="stat"><label>평균 RFM</label><value>9.8</value></div>
+            <div class="stat"><label>평균 GMV</label><value>₩351,845</value></div>
+            <div class="stat"><label>평균 미접속</label><value>134.0일</value></div>
+          </div>
+          <h3>CRM 액션 예시</h3>
+          <div class="crm-actions"><div class="crm-item"><strong>전종 세트 할인</strong><p>virtual_child_sku_count 수량 구매 시 N% 할인</p></div><div class="crm-item"><strong>미수집 버전 알림</strong><p>아직 구매하지 않은 멤버 버전 재고 알림</p></div><div class="crm-item"><strong>컬렉션 달성 배지</strong><p>전종 수집 완료 시 앱 내 배지 + 인증 혜택</p></div><div class="crm-item"><strong>시즌 컬렉션 예고</strong><p>다음 라운드 신규 포카 버전 선공개 알림</p></div></div>
+        </div>
+        
+        <div class="persona-card" style="border-top: 4px solid #95E1D3">
+          <div class="persona-header">
+            <span class="emoji">🌱</span>
+            <div>
+              <h2>비기너</h2>
+              <span class="badge" style="background:#95E1D3">146,526명 (99.2%)</span>
+            </div>
+          </div>
+          <p class="persona-desc">특정 특전이 탐나서 소량 구매하는 라이트 팬. 다양한 아티스트에 관심.</p>
+          <div class="traits"><span class="trait">소량 구매</span><span class="trait">다양한 이벤트 탐색</span><span class="trait">잠재적 충성 팬</span></div>
+          <div class="stats-row">
+            <div class="stat"><label>평균 RFM</label><value>9.0</value></div>
+            <div class="stat"><label>평균 GMV</label><value>₩1,298,817</value></div>
+            <div class="stat"><label>평균 미접속</label><value>288.0일</value></div>
+          </div>
+          <h3>CRM 액션 예시</h3>
+          <div class="crm-actions"><div class="crm-item"><strong>입문 패키지 추천</strong><p>1~2장 소량 구매 가능한 스타터 상품 노출</p></div><div class="crm-item"><strong>아티스트 탐색 유도</strong><p>관심 아티스트 기반 신규 이벤트 추천</p></div><div class="crm-item"><strong>첫 전종 달성 챌린지</strong><p>처음 전종 구매 시 특별 혜택으로 Collector 전환 유도</p></div><div class="crm-item"><strong>리타겟팅 캠페인</strong><p>마지막 구매 이후 관심 아티스트 이벤트 오픈 시 알림</p></div></div>
+        </div>
+        
+</div>
+
+<div class="section-title">아티스트별 유저 분포 (상위 10)</div>
+<table>
+  <thead>
+    <tr><th>아티스트</th><th>주요 세그먼트</th><th>유저 수</th><th>평균 GMV</th></tr>
+  </thead>
+  <tbody><tr><td>ATEEZ</td><td>Challenger</td><td>330</td><td>₩6,386,707</td></tr><tr><td>알파드라이브원</td><td>Challenger</td><td>267</td><td>₩2,049,899</td></tr><tr><td>알파드라이브원</td><td>Beginner</td><td>193</td><td>₩1,892,211</td></tr><tr><td>EXO</td><td>Challenger</td><td>169</td><td>₩878,402</td></tr><tr><td>ATEEZ</td><td>Beginner</td><td>108</td><td>₩28,490,012</td></tr><tr><td>스트레이 키즈</td><td>Beginner</td><td>42</td><td>₩253,641,692</td></tr><tr><td>ZEROBASEONE (제로베이스원)</td><td>Beginner</td><td>42</td><td>₩5,293,202</td></tr><tr><td>아이브</td><td>Challenger</td><td>34</td><td>₩7,502,510</td></tr><tr><td>천카이원</td><td>Challenger</td><td>33</td><td>₩174,382</td></tr><tr><td>NCT JNJM</td><td>Challenger</td><td>28</td><td>₩461,239</td></tr></tbody>
+</table>
+
+<p class="updated">생성일: 2026-06-16 17:51</p>
+</body>
+</html>

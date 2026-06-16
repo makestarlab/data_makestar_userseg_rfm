@@ -7,7 +7,7 @@ from google.cloud import bigquery
 from pathlib import Path
 import json
 
-KEY_PATH = "YOUR_BQ_SERVICE_ACCOUNT_KEY.json"
+KEY_PATH = "/Users/songakim/Documents/system/makestar-dw-5132eea235fa.json"
 PROJECT_ID = "makestar-dw"
 OUTPUT_PATH = Path(__file__).parent.parent / "output" / "rfm_report.html"
 
