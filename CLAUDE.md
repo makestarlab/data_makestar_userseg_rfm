@@ -7,17 +7,9 @@
 전체 유저풀 내에서 개별 유저의 상대적 위치를 RFM 스코어로 정량화하고,
 행동 유형(Collector/Challenger)과 주력 아티스트를 2nd depth dimension으로 분류.
 
-## RFM 정의
+## RFM 설계
 
-| 지표 | 정의 | 소스 |
-|---|---|---|
-| R (Recency) | 마지막 구매일 기준 최신성 | `datamart.total_orders.pay_date` |
-| F (Frequency) | 아티스트당 평균 구매횟수 = 총 구매횟수 / 구매 아티스트 수 | `datamart.total_orders` |
-| M (Monetary) | 누적 총 결제금액 | `datamart.total_orders.total_revenue` |
-
-- 각 지표 **1~5점** 스코어 (전체 유저풀 내 상대 위치 기준)
-- 구매대행 제외 (`service.md` 목록 참조)
-- `market_type IN ('B2C','B2B')` 기준
+→ `docs/rfm_design.md` 참조
 
 ## 2nd Depth Dimension
 
