@@ -105,11 +105,13 @@ artist_label_counts AS (
   GROUP BY 1,2,3
 ),
 artist_labeled AS (
-  SELECT user_id, artist_id,
-    ARRAY_AGG(option_label ORDER BY cnt DESC,
+  SELECT user_id, artist_id, option_label AS artist_label
+  FROM artist_label_counts
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY user_id, artist_id
+    ORDER BY cnt DESC,
       CASE option_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
-      LIMIT 1)[SAFE_OFFSET(0)] AS artist_label
-  FROM artist_label_counts GROUP BY 1,2
+  ) = 1
 ),
 
 -- ── 유저 단위 ─────────────────────────────────────────────────
@@ -118,22 +120,23 @@ user_label_counts AS (
   FROM artist_labeled GROUP BY 1,2
 ),
 user_dimension AS (
-  SELECT user_id,
-    ARRAY_AGG(artist_label ORDER BY cnt DESC,
+  SELECT user_id, artist_label AS dimension_label
+  FROM user_label_counts
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY user_id
+    ORDER BY cnt DESC,
       CASE artist_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
-      LIMIT 1)[SAFE_OFFSET(0)] AS dimension_label
-  FROM user_label_counts GROUP BY user_id
+  ) = 1
 ),
 
 -- ── 주력 아티스트 ─────────────────────────────────────────────
 artist_gmv AS (
   SELECT
     o.user_id, e.artist_id,
-    MAX(i.artist_name) AS artist_name,
-    SUM(o.total_revenue) AS artist_gmv
+    MAX(o.ip_name) AS artist_name,
+    SUM(o.total_revenue) AS gmv
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
-  LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i ON o.event_id = i.product_event_code
   WHERE o.market_type IN ('B2C','B2B')
     AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
@@ -141,18 +144,17 @@ artist_gmv AS (
   GROUP BY 1,2
 ),
 main_artist AS (
-  SELECT user_id,
-    ARRAY_AGG(STRUCT(artist_id, artist_name, artist_gmv)
-      ORDER BY artist_gmv DESC LIMIT 1)[SAFE_OFFSET(0)] AS top_artist
-  FROM artist_gmv GROUP BY user_id
+  SELECT user_id, artist_id, artist_name, gmv AS artist_gmv
+  FROM artist_gmv
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY gmv DESC) = 1
 )
 
 -- ── 최종 결과 ─────────────────────────────────────────────────
 SELECT
   d.user_id,
   d.dimension_label,
-  a.top_artist.artist_id   AS main_artist_id,
-  a.top_artist.artist_name AS main_artist_name,
-  a.top_artist.artist_gmv  AS main_artist_gmv
+  a.artist_id   AS main_artist_id,
+  a.artist_name AS main_artist_name,
+  a.artist_gmv  AS main_artist_gmv
 FROM user_dimension d
 LEFT JOIN main_artist a ON d.user_id = a.user_id
