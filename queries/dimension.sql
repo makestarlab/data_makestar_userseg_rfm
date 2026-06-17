@@ -1,19 +1,22 @@
 -- ============================================================
 -- 2nd Depth Dimension 분류
--- 라운드(album_name × artist) 단위로 패턴 분류 후 유저 레이블링
+-- 집계: 유저 × 아티스트 × 이벤트 × 옵션 → 아티스트 → 유저
 --
--- 분류 기준:
---   Challenger : qty_ratio >= CHALLENGER_THRESHOLD
---                OR 같은 event_id를 여러 주문으로 중복 구매
---   Collector  : virtual_child_sku_count 기반 구매 패턴 (Challenger 아닌 경우)
---   Beginner   : 위 패턴 해당 없음 (소량, 비체계적 구매)
+-- qty_ratio  : user × event_id × option_code 단위
+-- 가격(unit_price): SUM(total_revenue) / SUM(order_qty) 옵션 단가
+-- 당첨 이력  : tb_commerce_event_winner_group.winner_list
 --
--- 유저 레이블: 라운드별 패턴 중 최다 출현 → 동률 시 Challenger > Collector > Beginner
+-- 분류 우선순위:
+--   1. 당첨 이력 있음           → Challenger
+--   2. qty_ratio > 1.0          → Challenger
+--   3. qty_ratio >= threshold   → Collector  (가격대별 하한)
+--   4. qty_ratio < threshold    → Beginner
 --
--- CHALLENGER_THRESHOLD: 데이터 분포 확인 후 조정 필요 (현재 기본값 2.0)
+-- 가격대별 Collector 하한:
+--   ~5만원    : 0.5
+--   5~20만원  : 0.3
+--   20만원+   : 0.2
 -- ============================================================
-
--- Challenger 임계값: qty_ratio > 1.0 (전종 초과 구매 = 응모 베팅 목적)
 
 WITH
 
@@ -38,147 +41,110 @@ agents AS (
   ]) AS user_id
 ),
 
--- 주문 × 이벤트 × SKU 연결
-order_base AS (
+-- 당첨 이력 유저 목록
+winners AS (
+  SELECT DISTINCT CAST(o.user_id AS STRING) AS user_id
+  FROM `makestar-dw.pg_mystarroom_public.tb_commerce_event_winner_group`
+  JOIN UNNEST(JSON_EXTRACT_ARRAY(winner_list)) b
+  JOIN `makestar-dw.pg_mystarroom_public.tb_commerce_order` o
+    ON JSON_VALUE(b.information.order.order_number) = o.order_number
+  WHERE JSON_VALUE(b.user.id) != '-1'
+),
+
+-- ── qty_ratio: user × event_id × option_code 단위 ─────────────
+option_stats AS (
   SELECT
     o.user_id,
-    o.order_no,
+    e.artist_id,
     o.event_id,
     o.option_code,
-    o.order_qty,
-    o.total_revenue,
-    e.artist_id,
-    e.album_name,
-    i.sku_code,
-    s.virtual_child_sku_count
+    SUM(o.order_qty)                                                        AS total_qty,
+    SAFE_DIVIDE(SUM(o.total_revenue), NULLIF(SUM(o.order_qty), 0))          AS unit_price,
+    MAX(s.virtual_child_sku_count)                                          AS sku_variety,
+    SAFE_DIVIDE(SUM(o.order_qty), NULLIF(MAX(s.virtual_child_sku_count),0)) AS qty_ratio
   FROM `makestar-dw.datamart.total_orders` o
-  LEFT JOIN `makestar-dw.datamart.events_` e
-         ON o.event_id = e.event_id
+  LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
   LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i
-         ON o.event_id    = i.product_event_code
-        AND o.option_code = i.product_option_id
-  LEFT JOIN `makestar-dw.pg_oms_public.mst_sku` s
-         ON i.sku_code = s.sku_code
-  WHERE o.market_type IN ('B2C', 'B2B')
+         ON o.event_id = i.product_event_code AND o.option_code = i.product_option_id
+  LEFT JOIN `makestar-dw.pg_oms_public.mst_sku` s ON i.sku_code = s.sku_code
+  WHERE o.market_type IN ('B2C','B2B')
+    AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
-    AND e.album_name IS NOT NULL
-    AND e.artist_id  IS NOT NULL
+    AND s.virtual_child_sku_count > 1
+  GROUP BY 1,2,3,4
 ),
 
--- ── 이벤트 단위 집계 ──────────────────────────────────────────
--- 같은 event_id 중복 주문 및 qty_ratio 계산
-event_stats AS (
-  SELECT
-    user_id,
-    event_id,
-    artist_id,
-    album_name,
-    COUNT(DISTINCT order_no)             AS order_cnt,   -- 중복 주문 횟수
-    SUM(order_qty)                       AS total_qty,
-    MAX(virtual_child_sku_count)         AS sku_variety,
-    SAFE_DIVIDE(
-      SUM(order_qty),
-      NULLIF(MAX(virtual_child_sku_count), 0)
-    )                                    AS qty_ratio
-  FROM order_base
-  GROUP BY user_id, event_id, artist_id, album_name
-),
-
--- ── 이벤트 단위 패턴 분류 ──────────────────────────────────────
-event_labeled AS (
-  SELECT
-    *,
+-- ── 가격대별 Collector 하한 ────────────────────────────────────
+option_labeled AS (
+  SELECT *,
     CASE
-      WHEN qty_ratio > 1.0  THEN 'Challenger'  -- 전종 초과 (응모 베팅)
-      WHEN qty_ratio = 1.0  THEN 'Collector'   -- 전종 정확히 수집
-      ELSE                       'Beginner'    -- 전종 미만 또는 sku_variety 없음
-    END AS event_label
-  FROM event_stats
+      WHEN unit_price >= 200000 THEN 0.2
+      WHEN unit_price >= 50000  THEN 0.3
+      ELSE                           0.5
+    END AS collector_threshold
+  FROM option_stats
 ),
 
--- ── 라운드 단위 집계 (이벤트 → 라운드) ────────────────────────
--- 라운드 내 여러 이벤트 중 최다 패턴 → 라운드 레이블
-round_label_counts AS (
-  SELECT
-    user_id,
-    artist_id,
-    album_name,
-    event_label,
-    COUNT(*) AS label_cnt
-  FROM event_labeled
-  GROUP BY user_id, artist_id, album_name, event_label
+-- ── 옵션 단위 분류 ─────────────────────────────────────────────
+event_labeled AS (
+  SELECT o.*,
+    CASE
+      WHEN w.user_id IS NOT NULL               THEN 'Challenger'
+      WHEN o.qty_ratio > 1.0                   THEN 'Challenger'
+      WHEN o.qty_ratio >= o.collector_threshold THEN 'Collector'
+      ELSE                                          'Beginner'
+    END AS option_label
+  FROM option_labeled o
+  LEFT JOIN winners w ON o.user_id = w.user_id
 ),
 
-round_labeled AS (
-  SELECT
-    user_id,
-    artist_id,
-    album_name,
-    ARRAY_AGG(event_label ORDER BY
-      label_cnt DESC,
-      CASE event_label
-        WHEN 'Challenger' THEN 1
-        WHEN 'Collector'  THEN 2
-        ELSE 3
-      END
-      LIMIT 1
-    )[SAFE_OFFSET(0)]  AS round_label
-  FROM round_label_counts
-  GROUP BY user_id, artist_id, album_name
+-- ── 아티스트 단위 ─────────────────────────────────────────────
+artist_label_counts AS (
+  SELECT user_id, artist_id, option_label, COUNT(*) AS cnt
+  FROM event_labeled WHERE artist_id IS NOT NULL
+  GROUP BY 1,2,3
+),
+artist_labeled AS (
+  SELECT user_id, artist_id,
+    ARRAY_AGG(option_label ORDER BY cnt DESC,
+      CASE option_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
+      LIMIT 1)[SAFE_OFFSET(0)] AS artist_label
+  FROM artist_label_counts GROUP BY 1,2
 ),
 
--- ── 유저 단위 레이블링 ─────────────────────────────────────────
--- 전체 라운드 중 최다 패턴 → 유저 최종 레이블
+-- ── 유저 단위 ─────────────────────────────────────────────────
 user_label_counts AS (
-  SELECT
-    user_id,
-    round_label,
-    COUNT(*) AS label_cnt
-  FROM round_labeled
-  GROUP BY user_id, round_label
+  SELECT user_id, artist_label, COUNT(*) AS cnt
+  FROM artist_labeled GROUP BY 1,2
 ),
-
 user_dimension AS (
-  SELECT
-    user_id,
-    ARRAY_AGG(round_label ORDER BY
-      label_cnt DESC,
-      CASE round_label
-        WHEN 'Challenger' THEN 1
-        WHEN 'Collector'  THEN 2
-        ELSE 3
-      END
-      LIMIT 1
-    )[SAFE_OFFSET(0)]  AS dimension_label
-  FROM user_label_counts
-  GROUP BY user_id
+  SELECT user_id,
+    ARRAY_AGG(artist_label ORDER BY cnt DESC,
+      CASE artist_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
+      LIMIT 1)[SAFE_OFFSET(0)] AS dimension_label
+  FROM user_label_counts GROUP BY user_id
 ),
 
--- ── Artist: 주력 아티스트 ──────────────────────────────────────
+-- ── 주력 아티스트 ─────────────────────────────────────────────
 artist_gmv AS (
   SELECT
-    o.user_id,
-    e.artist_id,
+    o.user_id, e.artist_id,
     MAX(i.artist_name) AS artist_name,
     SUM(o.total_revenue) AS artist_gmv
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
   LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i ON o.event_id = i.product_event_code
-  WHERE o.market_type IN ('B2C', 'B2B')
+  WHERE o.market_type IN ('B2C','B2B')
+    AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
     AND e.artist_id IS NOT NULL
-  GROUP BY o.user_id, e.artist_id
+  GROUP BY 1,2
 ),
-
 main_artist AS (
-  SELECT
-    user_id,
-    ARRAY_AGG(
-      STRUCT(artist_id, artist_name, artist_gmv)
-      ORDER BY artist_gmv DESC LIMIT 1
-    )[SAFE_OFFSET(0)] AS top_artist
-  FROM artist_gmv
-  GROUP BY user_id
+  SELECT user_id,
+    ARRAY_AGG(STRUCT(artist_id, artist_name, artist_gmv)
+      ORDER BY artist_gmv DESC LIMIT 1)[SAFE_OFFSET(0)] AS top_artist
+  FROM artist_gmv GROUP BY user_id
 )
 
 -- ── 최종 결과 ─────────────────────────────────────────────────

@@ -79,6 +79,7 @@ orders AS (
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
   WHERE o.market_type IN ('B2C','B2B')
+    AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
 ),
 frequency AS (
@@ -114,7 +115,8 @@ FROM base
 # ─── Step 2: Dimension 저장 ───────────────────────────────────────
 DIM_SAVE_SQL = """
 CREATE OR REPLACE TABLE `makestar-dw.datamart.user_rfm_dimension` AS
-WITH agents AS (
+WITH
+agents AS (
   SELECT user_id FROM UNNEST([
     '1876860','812307','1736734','621230','1302313','1902098','859600','969308',
     '1027784','1581799','797962','802866','1492647','781240','885795','1264675',
@@ -134,75 +136,90 @@ WITH agents AS (
     '1673444','1334025','1982712','1290379','1503928','1502504','2159410'
   ]) AS user_id
 ),
-order_base AS (
+winners AS (
+  SELECT DISTINCT CAST(o.user_id AS STRING) AS user_id
+  FROM `makestar-dw.pg_mystarroom_public.tb_commerce_event_winner_group`
+  JOIN UNNEST(JSON_EXTRACT_ARRAY(winner_list)) b
+  JOIN `makestar-dw.pg_mystarroom_public.tb_commerce_order` o
+    ON JSON_VALUE(b.information.order.order_number) = o.order_number
+  WHERE JSON_VALUE(b.user.id) != '-1'
+),
+option_stats AS (
   SELECT
-    o.user_id, o.order_no, o.event_id, o.option_code, o.order_qty, o.total_revenue,
-    e.artist_id, e.album_name,
-    i.sku_code, s.virtual_child_sku_count
+    o.user_id, e.artist_id, o.event_id, o.option_code,
+    SUM(o.order_qty)                                                        AS total_qty,
+    SAFE_DIVIDE(SUM(o.total_revenue), NULLIF(SUM(o.order_qty), 0))          AS unit_price,
+    MAX(s.virtual_child_sku_count)                                          AS sku_variety,
+    SAFE_DIVIDE(SUM(o.order_qty), NULLIF(MAX(s.virtual_child_sku_count),0)) AS qty_ratio
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
   LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i
          ON o.event_id = i.product_event_code AND o.option_code = i.product_option_id
   LEFT JOIN `makestar-dw.pg_oms_public.mst_sku` s ON i.sku_code = s.sku_code
   WHERE o.market_type IN ('B2C','B2B')
+    AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
-    AND e.album_name IS NOT NULL AND e.artist_id IS NOT NULL
+    AND s.virtual_child_sku_count > 1
+  GROUP BY 1,2,3,4
 ),
-event_stats AS (
-  SELECT
-    user_id, event_id, artist_id, album_name,
-    SUM(order_qty)                                          AS total_qty,
-    MAX(virtual_child_sku_count)                            AS sku_variety,
-    SAFE_DIVIDE(SUM(order_qty), NULLIF(MAX(virtual_child_sku_count), 0)) AS qty_ratio
-  FROM order_base
-  GROUP BY user_id, event_id, artist_id, album_name
-),
-event_labeled AS (
+option_labeled AS (
   SELECT *,
     CASE
-      WHEN qty_ratio > 1.0  THEN 'Challenger'
-      WHEN qty_ratio = 1.0  THEN 'Collector'
-      ELSE                       'Beginner'
-    END AS event_label
-  FROM event_stats
+      WHEN unit_price >= 200000 THEN 0.2
+      WHEN unit_price >= 50000  THEN 0.3
+      ELSE                           0.5
+    END AS collector_threshold
+  FROM option_stats
 ),
-round_label_counts AS (
-  SELECT user_id, artist_id, album_name, event_label, COUNT(*) AS cnt
-  FROM event_labeled GROUP BY 1,2,3,4
+event_labeled AS (
+  SELECT o.*,
+    CASE
+      WHEN w.user_id IS NOT NULL               THEN 'Challenger'
+      WHEN o.qty_ratio > 1.0                   THEN 'Challenger'
+      WHEN o.qty_ratio >= o.collector_threshold THEN 'Collector'
+      ELSE                                          'Beginner'
+    END AS option_label
+  FROM option_labeled o
+  LEFT JOIN winners w ON o.user_id = w.user_id
 ),
-round_labeled AS (
-  SELECT user_id, artist_id, album_name,
-    ARRAY_AGG(event_label ORDER BY cnt DESC,
-      CASE event_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
-      LIMIT 1)[SAFE_OFFSET(0)] AS round_label
-  FROM round_label_counts GROUP BY 1,2,3
+artist_label_counts AS (
+  SELECT user_id, artist_id, option_label, COUNT(*) AS cnt
+  FROM event_labeled WHERE artist_id IS NOT NULL GROUP BY 1,2,3
+),
+artist_labeled AS (
+  SELECT user_id, artist_id,
+    ARRAY_AGG(option_label ORDER BY cnt DESC,
+      CASE option_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
+      LIMIT 1)[SAFE_OFFSET(0)] AS artist_label
+  FROM artist_label_counts GROUP BY 1,2
 ),
 user_label_counts AS (
-  SELECT user_id, round_label, COUNT(*) AS cnt FROM round_labeled GROUP BY 1,2
+  SELECT user_id, artist_label, COUNT(*) AS cnt FROM artist_labeled GROUP BY 1,2
 ),
 user_dimension AS (
   SELECT user_id,
-    ARRAY_AGG(round_label ORDER BY cnt DESC,
-      CASE round_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
+    ARRAY_AGG(artist_label ORDER BY cnt DESC,
+      CASE artist_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
       LIMIT 1)[SAFE_OFFSET(0)] AS dimension_label
   FROM user_label_counts GROUP BY user_id
 ),
 artist_gmv AS (
-  SELECT
-    o.user_id, e.artist_id,
+  SELECT o.user_id, e.artist_id,
     MAX(i.artist_name) AS artist_name,
     SUM(o.total_revenue) AS artist_gmv
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
   LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i ON o.event_id = i.product_event_code
   WHERE o.market_type IN ('B2C','B2B')
+    AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
     AND e.artist_id IS NOT NULL
   GROUP BY 1,2
 ),
 main_artist AS (
   SELECT user_id,
-    ARRAY_AGG(STRUCT(artist_id, artist_name, artist_gmv) ORDER BY artist_gmv DESC LIMIT 1)[SAFE_OFFSET(0)] AS top_artist
+    ARRAY_AGG(STRUCT(artist_id, artist_name, artist_gmv)
+      ORDER BY artist_gmv DESC LIMIT 1)[SAFE_OFFSET(0)] AS top_artist
   FROM artist_gmv GROUP BY user_id
 )
 SELECT
