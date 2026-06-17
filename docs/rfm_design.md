@@ -47,16 +47,30 @@ F = COUNT(DISTINCT artist_id || album_name) / COUNT(DISTINCT artist_id)
   → 유저 레이블 (아티스트들의 최빈값)
 ```
 
+#### SKU 필터
+
+분류 대상 SKU를 먼저 걸러낸다.
+
+| SKU 타입 | 처리 | 이유 |
+|---|---|---|
+| `sku_type = 'C'` (child SKU) | **제외** | 실제 앨범 단위 — 포카/응모 분석 대상 아님 |
+| `sku_type = 'P'` (parent SKU) | **포함** | 랜덤 포카 종류 수(`virtual_child_sku_count`) 보유 |
+| `sku_type = NULL` (조인 안 됨) | **포함** | 일반 상품 — 금액 기준으로 분류 |
+
+#### virtual_child_sku_count 처리
+
+| 상황 | 값 | qty_ratio 분모 |
+|---|---|---|
+| 포카 상품 (`vc > 1`) | 실제 멤버/종류 수 | `virtual_child_sku_count` |
+| 일반 상품 (`vc = NULL / 0`) | COALESCE → **1** | `1` (장수 그대로) |
+
 #### 핵심 변수
 
 | 변수 | 집계 단위 | 설명 |
 |---|---|---|
-| `qty_ratio` | user × event_id × **option_code** | `SUM(order_qty) / virtual_child_sku_count` |
+| `qty_ratio` | user × event_id × **option_code** | `SUM(order_qty) / COALESCE(virtual_child_sku_count, 1)` |
 | `unit_price` | user × event_id × option_code | `SUM(total_revenue) / SUM(order_qty)` |
 | `is_winner` | user | `tb_commerce_event_winner_group.winner_list` 당첨 이력 |
-
-> qty_ratio는 **옵션 단위**로 계산 — 같은 이벤트에서 멤버별 옵션을 따로 집계
-> 가격대는 **unit_price** 기준으로 Collector 하한 결정
 
 #### 옵션 단위 분류 로직
 
@@ -69,13 +83,14 @@ F = COUNT(DISTINCT artist_id || album_name) / COUNT(DISTINCT artist_id)
 
 #### 가격대별 Collector 하한 (collector_threshold)
 
-| 가격대 (unit_price) | collector_threshold | 의미 |
-|---|---|---|
-| ~5만원 미만 | 0.5 | 절반 이상 구매 |
-| 5만원~20만원 미만 | 0.3 | 1/3 이상 구매 |
-| 20만원 이상 | 0.2 | 1/5 이상 구매 |
+| 가격대 (unit_price) | 하한 | 포카 상품 의미 | 일반 상품 의미 |
+|---|---|---|---|
+| ~5만원 미만 | 0.5 | 전종의 절반 이상 | qty ≥ 0.5 → 1장만 사도 Collector |
+| 5만원~20만원 미만 | 0.3 | 전종의 1/3 이상 | qty ≥ 0.3 → 1장만 사도 Collector |
+| 20만원 이상 | 0.2 | 전종의 1/5 이상 | qty ≥ 0.2 → 1장만 사도 Collector |
 
-> 비싼 앨범일수록 낮은 qty_ratio도 Collector 의도로 인정
+> **일반 상품(vc=1)**: qty_ratio = order_qty이므로 1장 구매 = qty_ratio 1.0 ≥ 하한 → 항상 Collector 이상
+> **Beginner는 사실상 포카 상품 소량 구매자** (예: 8멤버 중 1장 = qty_ratio 0.125 < 0.5)
 
 #### 당첨 이력 소스
 
@@ -109,16 +124,17 @@ winners AS (
 ),
 
 -- qty_ratio: user × event_id × option_code 단위
+-- SKU C타입(album child SKU) 제외, vc=NULL → COALESCE 1 (일반 상품)
 option_stats AS (
   SELECT
     o.user_id,
     e.artist_id,
     o.event_id,
     o.option_code,
-    SUM(o.order_qty)                                                        AS total_qty,
-    SAFE_DIVIDE(SUM(o.total_revenue), NULLIF(SUM(o.order_qty), 0))          AS unit_price,
-    MAX(s.virtual_child_sku_count)                                          AS sku_variety,
-    SAFE_DIVIDE(SUM(o.order_qty), NULLIF(MAX(s.virtual_child_sku_count),0)) AS qty_ratio
+    SUM(o.order_qty)                                                                  AS total_qty,
+    SAFE_DIVIDE(SUM(o.total_revenue), NULLIF(SUM(o.order_qty), 0))                    AS unit_price,
+    COALESCE(MAX(s.virtual_child_sku_count), 1)                                       AS sku_variety,
+    SAFE_DIVIDE(SUM(o.order_qty), NULLIF(COALESCE(MAX(s.virtual_child_sku_count),1),0)) AS qty_ratio
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
   LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i
@@ -126,7 +142,7 @@ option_stats AS (
   LEFT JOIN `makestar-dw.pg_oms_public.mst_sku` s ON i.sku_code = s.sku_code
   WHERE o.market_type IN ('B2C','B2B')
     AND o.data_source = 'new_commerce_db'
-    AND s.virtual_child_sku_count > 1
+    AND (s.sku_type IS NULL OR s.sku_type = 'P')  -- album child SKU 제외
   GROUP BY 1,2,3,4
 ),
 
@@ -182,11 +198,11 @@ FROM user_label_counts GROUP BY user_id
 
 #### v1 결과 (new_commerce_db 기준)
 
-| 세그먼트 | 유저 수 | 당첨 이력 |
+| 세그먼트 | 유저 수 | 비고 |
 |---|---|---|
-| Challenger | 32,789명 | 24,328명 (74%) |
-| Collector | 24,077명 | — |
-| Beginner | 50,204명 | — |
+| Challenger | 52,522명 | 당첨 이력 24,328명(46%) 포함 |
+| Collector | 32,602명 | — |
+| Beginner | 25,371명 | 포카 상품 소량 구매자 중심 |
 
 ---
 
@@ -195,7 +211,8 @@ FROM user_label_counts GROUP BY user_id
 | 항목 | 내용 | 개선 방향 (v2) |
 |---|---|---|
 | old_commerce_db 미포함 | new_commerce_db(2024-12-20~)만 분류 가능 | 구형 데이터 조인 경로 확보 |
-| opportunity_version 미활용 | 응모권 포함 여부 미반영 | 응모권 유무 세분화 |
+| opportunity_version 미활용 | 응모권 포함 여부 미반영 — 응모권 없는 상품의 qty > 1이 Challenger로 과분류될 수 있음 | 응모권 유무로 Challenger 기준 세분화 |
+| 멤버별 옵션 다양성 미반영 | 멤버별로 1장씩 구매(option diversity)해도 option 단위 qty_ratio = 0.125 → Beginner 분류 가능 | 주문번호 × event 단위 total_qty 집계 추가 |
 | 인지도 낮은 아티스트 일부 오분류 | 낙첨 소량 베터는 qty_ratio가 낮아 Beginner로 분류될 수 있음 | 경쟁률 데이터 반영 |
 
 ---
