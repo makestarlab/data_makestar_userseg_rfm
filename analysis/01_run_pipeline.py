@@ -248,25 +248,35 @@ FROM `makestar-dw.datamart.user_rfm_score` r
 LEFT JOIN `makestar-dw.datamart.user_rfm_dimension` d ON r.user_id = d.user_id
 """
 
-if __name__ == "__main__":
-    print("=== RFM 파이프라인 시작 ===\n")
+# ─── Step 4: CRM 통합 테이블 ─────────────────────────────────────
+CRM_SAVE_SQL = open(
+    Path(__file__).parent.parent / "queries" / "crm_users.sql"
+).read()
 
-    print("[1/3] RFM 스코어 계산 및 저장")
+
+if __name__ == "__main__":
+    print("=== RFM 파이프라인 시작 (주 1회 전체 재계산) ===\n")
+
+    print("[1/4] RFM 스코어 계산 및 저장")
     bq_run(RFM_SAVE_SQL, "user_rfm_score")
 
-    print("\n[2/3] Dimension 분류 및 저장")
+    print("\n[2/4] Dimension 분류 및 저장")
     bq_run(DIM_SAVE_SQL, "user_rfm_dimension")
 
-    print("\n[3/3] 최종 세그먼트 통합")
+    print("\n[3/4] 최종 세그먼트 통합")
     bq_run(FINAL_SAVE_SQL, "user_rfm_segment")
+
+    print("\n[4/4] CRM 통합 테이블 생성")
+    bq_run(CRM_SAVE_SQL, "crm_users")
 
     # 결과 확인
     print("\n=== 결과 확인 ===")
     rows = bq_query("""
         SELECT dimension_label, COUNT(*) AS cnt,
                ROUND(AVG(rfm_total),1) AS avg_rfm,
-               ROUND(AVG(m_raw)) AS avg_gmv
-        FROM `makestar-dw.datamart.user_rfm_segment`
+               ROUND(AVG(total_gmv)) AS avg_gmv
+        FROM `makestar-dw.datamart.crm_users`
+        WHERE r_score IS NOT NULL
         GROUP BY 1 ORDER BY avg_rfm DESC
     """)
     for r in rows:
