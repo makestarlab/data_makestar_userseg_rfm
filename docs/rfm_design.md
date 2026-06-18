@@ -72,14 +72,25 @@ F = COUNT(DISTINCT artist_id || album_name) / COUNT(DISTINCT artist_id)
 | `unit_price` | user × event_id × option_code | `SUM(total_revenue) / SUM(order_qty)` |
 | `is_winner` | user | `tb_commerce_event_winner_group.winner_list` 당첨 이력 |
 
-#### 옵션 단위 분류 로직
+#### 4단계 유저 분류 (MECE)
+
+**옵션 단위 → 아티스트 → 유저** 집계 후 최종 레이블 결정.
 
 | 우선순위 | 조건 | 레이블 |
 |---|---|---|
-| 1 | `is_winner = true` | **Challenger** |
-| 2 | `qty_ratio > 1.0` | **Challenger** |
-| 3 | `qty_ratio >= collector_threshold` | **Collector** |
-| 4 | `qty_ratio < collector_threshold` | **Beginner** |
+| 1 | 당첨 이력 있음 | **Challenger** |
+| 1 | `qty_ratio > 1.5` (vc > 1 상품) | **Challenger** |
+| 1 | 응모권 상품 `SUM(order_qty) >= 10` (vc = 0/NULL) | **Challenger** |
+| 2 | `COUNT(DISTINCT ip_name) >= 3` AND `MAX(order_qty) <= 5` | **Album Collector** |
+| 3 | `qty_ratio >= collector_threshold` (vc > 1 상품) | **Poca Collector** |
+| 4 | 나머지 | **Beginner** |
+
+> **Album Collector**: 유저 전체 구매 이력 기준. 여러 아티스트를 소량씩 수집하는 패턴.
+> Challenger 조건 미충족 시만 적용.
+
+#### Challenger 임계값 변경 이력
+- v1: qty_ratio > 1.0
+- **v2: qty_ratio > 1.5** — qty_ratio 1.0~1.5 구간은 전종+여분 구매로 판단, Poca Collector로 분류
 
 #### 가격대별 Collector 하한 (collector_threshold)
 
@@ -196,13 +207,16 @@ SELECT user_id,
 FROM user_label_counts GROUP BY user_id
 ```
 
-#### v1 결과 (new_commerce_db 기준)
+#### v2 결과 (new_commerce_db, B2C, 최근 3개월 기준)
 
-| 세그먼트 | 유저 수 | 비고 |
-|---|---|---|
-| Challenger | 52,522명 | 당첨 이력 24,328명(46%) 포함 |
-| Collector | 32,602명 | — |
-| Beginner | 25,371명 | 포카 상품 소량 구매자 중심 |
+| 세그먼트 | 유저 수 | 비율 | avg_GMV | 특성 |
+|---|---|---|---|---|
+| **Challenger** | 17,180명 | 55.0% | ₩1,076,095 | 당첨 이력 / qty_ratio > 1.5 / 응모권 10장+ |
+| **Album Collector** | 56명 | 0.2% | ₩168,462 | 3개+ IP 소량 수집 (max_qty ≤ 5) |
+| **Poca Collector** | 2,282명 | 7.3% | ₩69,132 | qty_ratio 0.5~1.5 |
+| **Beginner** | 11,715명 | 37.5% | ₩98,799 | 소량 단발 구매 |
+
+> Challenger threshold: qty_ratio > **1.5** (v1: > 1.0 → 1.0~1.5는 여분 구매로 Poca Collector 흡수)
 
 ---
 

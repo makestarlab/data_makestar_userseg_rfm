@@ -115,7 +115,34 @@ FROM base
 # ─── Step 2: Dimension 저장 ───────────────────────────────────────
 DIM_SAVE_SQL = """
 CREATE OR REPLACE TABLE `makestar-dw.datamart.user_rfm_dimension` AS
+-- ============================================================
+-- 2nd Depth Dimension 분류 (v2)
+-- 4단계: Challenger / Album Collector / Poca Collector / Beginner
+--
+-- [Challenger] (우선순위 1)
+--   - 당첨 이력 있음
+--   - qty_ratio > 1.5 (vc > 1 포카 상품)
+--   - 응모권 상품(vc=0/NULL) SUM(order_qty) >= 10
+--
+-- [Album Collector] (우선순위 2)
+--   - NOT Challenger
+--   - COUNT(DISTINCT ip_name) >= 3 AND MAX(order_qty) <= 5
+--
+-- [Poca Collector] (우선순위 3)
+--   - NOT Challenger, NOT Album Collector
+--   - qty_ratio >= 가격대별 하한 (0.2~0.5)
+--
+-- [Beginner] (우선순위 4)
+--   - 나머지
+--
+-- 가격대별 Poca Collector 하한:
+--   ~5만원    : 0.5
+--   5~20만원  : 0.3
+--   20만원+   : 0.2
+-- ============================================================
+
 WITH
+
 agents AS (
   SELECT user_id FROM UNNEST([
     '1876860','812307','1736734','621230','1302313','1902098','859600','969308',
@@ -136,6 +163,8 @@ agents AS (
     '1673444','1334025','1982712','1290379','1503928','1502504','2159410'
   ]) AS user_id
 ),
+
+-- 당첨 이력
 winners AS (
   SELECT DISTINCT CAST(o.user_id AS STRING) AS user_id
   FROM `makestar-dw.pg_mystarroom_public.tb_commerce_event_winner_group`
@@ -144,76 +173,127 @@ winners AS (
     ON JSON_VALUE(b.information.order.order_number) = o.order_number
   WHERE JSON_VALUE(b.user.id) != '-1'
 ),
-option_stats AS (
+
+-- ── 포카 상품: qty_ratio (vc > 1, P타입) ─────────────────────
+poca_stats AS (
   SELECT
     o.user_id, e.artist_id, o.event_id, o.option_code,
     SUM(o.order_qty)                                                        AS total_qty,
     SAFE_DIVIDE(SUM(o.total_revenue), NULLIF(SUM(o.order_qty), 0))          AS unit_price,
-    MAX(s.virtual_child_sku_count)                                          AS sku_variety,
+    MAX(s.virtual_child_sku_count)                                          AS vc,
     SAFE_DIVIDE(SUM(o.order_qty), NULLIF(MAX(s.virtual_child_sku_count),0)) AS qty_ratio
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
   LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i
          ON o.event_id = i.product_event_code AND o.option_code = i.product_option_id
   LEFT JOIN `makestar-dw.pg_oms_public.mst_sku` s ON i.sku_code = s.sku_code
-  WHERE o.market_type IN ('B2C','B2B')
+  WHERE o.market_type = 'B2C'
     AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
-    AND s.virtual_child_sku_count > 1
+    AND s.sku_type = 'P' AND s.virtual_child_sku_count > 1
   GROUP BY 1,2,3,4
 ),
-option_labeled AS (
-  SELECT *,
-    CASE
-      WHEN unit_price >= 200000 THEN 0.2
-      WHEN unit_price >= 50000  THEN 0.3
-      ELSE                           0.5
-    END AS collector_threshold
-  FROM option_stats
+
+-- ── 응모권 상품: qty >= 10이면 Challenger (vc=0/NULL) ──────────
+omg_challengers AS (
+  SELECT DISTINCT o.user_id
+  FROM `makestar-dw.datamart.total_orders` o
+  LEFT JOIN `makestar-dw.datamart.vw_commerce_items_v2` i
+         ON o.event_id = i.product_event_code AND o.option_code = i.product_option_id
+  LEFT JOIN `makestar-dw.pg_oms_public.mst_sku` s ON i.sku_code = s.sku_code
+  WHERE o.market_type = 'B2C'
+    AND o.data_source = 'new_commerce_db'
+    AND o.event_id IS NOT NULL
+    AND o.user_id NOT IN (SELECT user_id FROM agents)
+    AND (s.sku_type IS NULL OR s.sku_type = 'C'
+         OR (s.sku_type = 'P' AND COALESCE(s.virtual_child_sku_count,0) = 0))
+  GROUP BY o.user_id, o.event_id, o.option_code
+  HAVING SUM(o.order_qty) >= 10
 ),
-event_labeled AS (
+
+-- ── 전체 구매 요약 (Album Collector 판별용) ───────────────────
+user_purchases AS (
+  SELECT
+    user_id,
+    COUNT(DISTINCT ip_name) AS distinct_ips,
+    MAX(order_qty)          AS max_qty
+  FROM `makestar-dw.datamart.total_orders`
+  WHERE market_type = 'B2C'
+    AND data_source = 'new_commerce_db'
+    AND user_id NOT IN (SELECT user_id FROM agents)
+  GROUP BY 1
+),
+
+-- ── 옵션 단위 포카 분류 ────────────────────────────────────────
+poca_labeled AS (
   SELECT o.*,
     CASE
-      WHEN w.user_id IS NOT NULL               THEN 'Challenger'
-      WHEN o.qty_ratio > 1.0                   THEN 'Challenger'
-      WHEN o.qty_ratio >= o.collector_threshold THEN 'Collector'
-      ELSE                                          'Beginner'
+      WHEN w.user_id IS NOT NULL                THEN 'Challenger'
+      WHEN o.user_id IN (SELECT user_id FROM omg_challengers) THEN 'Challenger'
+      WHEN o.qty_ratio > 1.5                    THEN 'Challenger'
+      WHEN o.qty_ratio >= CASE
+             WHEN o.unit_price >= 200000 THEN 0.2
+             WHEN o.unit_price >= 50000  THEN 0.3
+             ELSE 0.5 END                       THEN 'Poca Collector'
+      ELSE                                           'Beginner'
     END AS option_label
-  FROM option_labeled o
+  FROM poca_stats o
   LEFT JOIN winners w ON o.user_id = w.user_id
 ),
-artist_label_counts AS (
+
+-- ── 아티스트 단위 집계 ────────────────────────────────────────
+artist_lc AS (
   SELECT user_id, artist_id, option_label, COUNT(*) AS cnt
-  FROM event_labeled WHERE artist_id IS NOT NULL GROUP BY 1,2,3
+  FROM poca_labeled WHERE artist_id IS NOT NULL GROUP BY 1,2,3
 ),
 artist_labeled AS (
   SELECT user_id, artist_id, option_label AS artist_label
-  FROM artist_label_counts
+  FROM artist_lc
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY user_id, artist_id
     ORDER BY cnt DESC,
-      CASE option_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
+      CASE option_label WHEN 'Challenger' THEN 1 WHEN 'Poca Collector' THEN 2 ELSE 3 END
   ) = 1
 ),
-user_label_counts AS (
-  SELECT user_id, artist_label, COUNT(*) AS cnt FROM artist_labeled GROUP BY 1,2
-),
-user_dimension AS (
-  SELECT user_id, artist_label AS dimension_label
-  FROM user_label_counts
+
+-- ── 유저 단위 포카 기반 레이블 ────────────────────────────────
+user_lc AS (SELECT user_id, artist_label, COUNT(*) AS cnt FROM artist_labeled GROUP BY 1,2),
+user_poca_label AS (
+  SELECT user_id, artist_label AS poca_label
+  FROM user_lc
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY user_id
     ORDER BY cnt DESC,
-      CASE artist_label WHEN 'Challenger' THEN 1 WHEN 'Collector' THEN 2 ELSE 3 END
+      CASE artist_label WHEN 'Challenger' THEN 1 WHEN 'Poca Collector' THEN 2 ELSE 3 END
   ) = 1
 ),
+
+-- ── 최종 4단계 분류 ───────────────────────────────────────────
+-- 1. Challenger (당첨/qty>1.5/응모권10장+)
+-- 2. Album Collector (ip>=3 AND max_qty<=5, not Challenger)
+-- 3. Poca Collector (qty_ratio 범위)
+-- 4. Beginner
+final_dimension AS (
+  SELECT
+    up.user_id,
+    CASE
+      WHEN COALESCE(pl.poca_label, 'Beginner') = 'Challenger'    THEN 'Challenger'
+      WHEN up.distinct_ips >= 3 AND up.max_qty <= 5               THEN 'Album Collector'
+      WHEN COALESCE(pl.poca_label, 'Beginner') = 'Poca Collector' THEN 'Poca Collector'
+      ELSE                                                              'Beginner'
+    END AS dimension_label
+  FROM user_purchases up
+  LEFT JOIN user_poca_label pl ON up.user_id = pl.user_id
+),
+
+-- ── 주력 아티스트 ─────────────────────────────────────────────
 artist_gmv AS (
   SELECT o.user_id, e.artist_id,
     MAX(o.ip_name) AS artist_name,
     SUM(o.total_revenue) AS gmv
   FROM `makestar-dw.datamart.total_orders` o
   LEFT JOIN `makestar-dw.datamart.events_` e ON o.event_id = e.event_id
-  WHERE o.market_type IN ('B2C','B2B')
+  WHERE o.market_type = 'B2C'
     AND o.data_source = 'new_commerce_db'
     AND o.user_id NOT IN (SELECT user_id FROM agents)
     AND e.artist_id IS NOT NULL
@@ -224,13 +304,18 @@ main_artist AS (
   FROM artist_gmv
   QUALIFY ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY gmv DESC) = 1
 )
+
+-- ── 최종 결과 ─────────────────────────────────────────────────
 SELECT
-  d.user_id, d.dimension_label,
+  d.user_id,
+  d.dimension_label,
   a.artist_id   AS main_artist_id,
   a.artist_name AS main_artist_name,
   a.artist_gmv  AS main_artist_gmv
-FROM user_dimension d
+FROM final_dimension d
 LEFT JOIN main_artist a ON d.user_id = a.user_id
+
+
 """
 
 # ─── Step 3: 최종 통합 저장 ──────────────────────────────────────
