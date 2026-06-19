@@ -59,7 +59,7 @@ purchase_stats AS (
     ROUND(SAFE_DIVIDE(SUM(total_revenue), COUNT(DISTINCT order_no))) AS avg_order_value,
     COUNT(DISTINCT DATE_TRUNC(DATE(pay_date), MONTH)) AS active_months
   FROM `makestar-dw.datamart.total_orders`
-  WHERE market_type IN ('B2C','B2B')
+  WHERE market_type = 'B2C'
     AND data_source = 'new_commerce_db'
     AND user_id NOT IN (SELECT user_id FROM agents)
   GROUP BY user_id

@@ -299,9 +299,10 @@ final_dimension AS (
       WHEN COALESCE(pl.poca_label, 'Beginner') = 'Challenger'    THEN 'Challenger'
       WHEN up.user_id IN (SELECT user_id FROM winners)            THEN 'Challenger'
       WHEN up.user_id IN (SELECT user_id FROM omg_challengers)    THEN 'Challenger'
-      WHEN up.distinct_ips >= 3 AND up.max_qty <= 5               THEN 'Album Collector'
+      WHEN up.distinct_ips >= 3 AND up.max_qty < 3                THEN 'Album Collector'
       WHEN COALESCE(pl.poca_label, 'Beginner') = 'Poca Collector' THEN 'Poca Collector'
       WHEN up.event_order_cnt = 0                                  THEN 'Shopper'
+      WHEN pl.poca_label IS NULL AND up.event_order_cnt > 0        THEN 'N/A'
       ELSE                                                              'Beginner'
     END AS dimension_label
   FROM user_purchases up
